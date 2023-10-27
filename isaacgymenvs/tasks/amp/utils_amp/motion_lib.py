@@ -32,20 +32,21 @@ import yaml
 
 from ..poselib.poselib.skeleton.skeleton3d import SkeletonMotion
 from ..poselib.poselib.core.rotation3d import *
-
-from isaacgymenvs.utils.torch_jit_utils import to_torch, slerp, quat_to_exp_map, quat_to_angle_axis, normalize_angle
-
-from isaacgymenvs.tasks.amp.humanoid_amp_base import DOF_BODY_IDS, DOF_OFFSETS
+from isaacgym.torch_utils import *
+from isaacgymenvs.utils.torch_jit_utils import *
 
 
-class MotionLib():
-    def __init__(self, motion_file, num_dofs, key_body_ids, device):
-        self._num_dof = num_dofs
+class MotionLib:
+    def __init__(self, motion_file, dof_names, key_body_ids, device):
+        self._num_dof = len(dof_names)
+        self._dof_names = dof_names
         self._key_body_ids = key_body_ids
         self._device = device
         self._load_motions(motion_file)
 
-        self.motion_ids = torch.arange(len(self._motions), dtype=torch.long, device=self._device)
+        self.motion_ids = torch.arange(
+            len(self._motions), dtype=torch.long, device=self._device
+        )
 
         return
 
@@ -67,10 +68,10 @@ class MotionLib():
     def sample_time(self, motion_ids, truncate_time=None):
         n = len(motion_ids)
         phase = np.random.uniform(low=0.0, high=1.0, size=motion_ids.shape)
-        
+
         motion_len = self._motion_lengths[motion_ids]
-        if (truncate_time is not None):
-            assert(truncate_time >= 0.0)
+        if truncate_time is not None:
+            assert truncate_time >= 0.0
             motion_len -= truncate_time
 
         motion_time = phase * motion_len
@@ -92,39 +93,139 @@ class MotionLib():
         root_rot1 = np.empty([n, 4])
         root_vel = np.empty([n, 3])
         root_ang_vel = np.empty([n, 3])
-        local_rot0 = np.empty([n, num_bodies, 4])
-        local_rot1 = np.empty([n, num_bodies, 4])
+        joint_pos0 = np.empty([n, self._num_dof])
+        joint_pos1 = np.empty([n, self._num_dof])
         dof_vel = np.empty([n, self._num_dof])
         key_pos0 = np.empty([n, num_key_bodies, 3])
         key_pos1 = np.empty([n, num_key_bodies, 3])
+        thrust0 = np.empty([n, 4])
+        thrust1 = np.empty([n, 4])
+
+        init_h = np.empty([n])
 
         motion_len = self._motion_lengths[motion_ids]
         num_frames = self._motion_num_frames[motion_ids]
         dt = self._motion_dt[motion_ids]
 
-        frame_idx0, frame_idx1, blend = self._calc_frame_blend(motion_times, motion_len, num_frames, dt)
+        frame_idx0, frame_idx1, blend = self._calc_frame_blend(
+            motion_times, motion_len, num_frames, dt
+        )
 
         unique_ids = np.unique(motion_ids)
         for uid in unique_ids:
             ids = np.where(motion_ids == uid)
             curr_motion = self._motions[uid]
+            # root_pos0[ids, :] = curr_motion["root_position"][frame_idx0[ids],0].numpy()
+            # root_pos1[ids, :] = curr_motion["root_position"][frame_idx1[ids],0].numpy()
+            root_pos0[ids, :] = np.array(
+                [curr_motion["root_position"][index] for index in frame_idx0[ids]]
+            )
+            # set z to 0.63
+            # root_pos0[ids, 2] = 0.64
 
-            root_pos0[ids, :]  = curr_motion.global_translation[frame_idx0[ids], 0].numpy()
-            root_pos1[ids, :]  = curr_motion.global_translation[frame_idx1[ids], 0].numpy()
+            root_pos1[ids, :] = np.array(
+                [curr_motion["root_position"][index] for index in frame_idx1[ids]]
+            )
 
-            root_rot0[ids, :] = curr_motion.global_rotation[frame_idx0[ids], 0].numpy()
-            root_rot1[ids, :]  = curr_motion.global_rotation[frame_idx1[ids], 0].numpy()
+            # root_pos1[ids, 2] = 0.64
 
-            local_rot0[ids, :, :]= curr_motion.local_rotation[frame_idx0[ids]].numpy()
-            local_rot1[ids, :, :] = curr_motion.local_rotation[frame_idx1[ids]].numpy()
+            # root_rot0[ids, :] = curr_motion["root_quaternion"][
+            #     frame_idx0[ids], 0
+            # ].numpy()
 
-            root_vel[ids, :] = curr_motion.global_root_velocity[frame_idx0[ids]].numpy()
-            root_ang_vel[ids, :] = curr_motion.global_root_angular_velocity[frame_idx0[ids]].numpy()
-            
-            key_pos0[ids, :, :] = curr_motion.global_translation[frame_idx0[ids][:, np.newaxis], self._key_body_ids[np.newaxis, :]].numpy()
-            key_pos1[ids, :, :] = curr_motion.global_translation[frame_idx1[ids][:, np.newaxis], self._key_body_ids[np.newaxis, :]].numpy()
+            # root_rot1[ids, :] = curr_motion["root_quaternion"][
+            #     frame_idx1[ids], 0
+            # ].numpy()
 
-            dof_vel[ids, :] = curr_motion.dof_vels[frame_idx0[ids]]
+            root_rot0[ids, :] = np.array(
+                [
+                    to_xyzw(curr_motion["root_quaternion"][index])
+                    for index in frame_idx0[ids]
+                ]
+            )
+
+            root_rot1[ids, :] = np.array(
+                [
+                    to_xyzw(curr_motion["root_quaternion"][index])
+                    for index in frame_idx1[ids]
+                ]
+            )
+
+            # print(f"frame{frame_idx0[0]}, {root_rot0[frame_idx0[0]]}")
+            # print(f"frame{frame_idx0[1]}, {root_rot0[frame_idx0[1]]}")
+            # print(f"frame{frame_idx1[0]}, {root_rot1[frame_idx1[0]]}")
+            # print(f"frame{frame_idx1[1]}, {root_rot1[frame_idx1[1]]}")
+
+            # print(f"joint_shape{joint_pos0.shape}")
+            # print(
+            #     np.array(
+            #         [curr_motion["joint_positions"][index] for index in frame_idx0[ids]]
+            #     ).shape
+            # )
+            joint_pos0[ids, :] = np.array(
+                [curr_motion["joint_positions"][index] for index in frame_idx0[ids]]
+            ).squeeze()
+            joint_pos1[ids, :] = np.array(
+                [curr_motion["joint_positions"][index] for index in frame_idx1[ids]]
+            ).squeeze()
+
+            root_vel[ids, :] = curr_motion["global_root_velocity"][frame_idx0[ids]]
+            root_ang_vel[ids, :] = np.zeros([len(ids[0]), 3])
+            # root_ang_vel[ids, :] = (
+            #     curr_motion["global_root_ang_velocity"][frame_idx0[ids]] * 0
+            # )
+
+            key_pos0[ids, 0, :] = [
+                curr_motion["r_arm_jet_turbine"][index] for index in frame_idx0[ids]
+            ]
+            key_pos1[ids, 0, :] = [
+                curr_motion["r_arm_jet_turbine"][index] for index in frame_idx1[ids]
+            ]
+
+            key_pos0[ids, 1, :] = [
+                curr_motion["l_arm_jet_turbine"][index] for index in frame_idx0[ids]
+            ]
+
+            key_pos1[ids, 1, :] = [
+                curr_motion["l_arm_jet_turbine"][index] for index in frame_idx1[ids]
+            ]
+
+            key_pos0[ids, 2, :] = [
+                curr_motion["r_sole"][index] for index in frame_idx0[ids]
+            ]
+            key_pos1[ids, 2, :] = [
+                curr_motion["r_sole"][index] for index in frame_idx1[ids]
+            ]
+
+            key_pos0[ids, 3, :] = [
+                curr_motion["l_sole"][index] for index in frame_idx0[ids]
+            ]
+
+            key_pos1[ids, 3, :] = [
+                curr_motion["l_sole"][index] for index in frame_idx1[ids]
+            ]
+
+            # key_pos0[ids, :, :] = curr_motion.global_translation[
+            #     frame_idx0[ids][:, np.newaxis], self._key_body_ids[np.newaxis, :]
+            # ].numpy()
+            # key_pos1[ids, :, :] = curr_motion.global_translation[
+            #     frame_idx1[ids][:, np.newaxis], self._key_body_ids[np.newaxis, :]
+            # ].numpy()
+
+            dof_vel[ids, :] = curr_motion["dof_vels"][frame_idx0[ids]]
+            if "thrust" in curr_motion:
+                thrust0[ids, :] = [
+                    curr_motion["thrust"][index] for index in frame_idx0[ids]
+                ]
+                thrust1[ids, :] = [
+                    curr_motion["thrust"][index] for index in frame_idx1[ids]
+                ]
+
+                init_h[ids] = root_pos0[ids, 2] + 0.5
+            else:
+                thrust0[ids, :] = np.zeros([len(ids[0]), 4])
+                thrust1[ids, :] = np.zeros([len(ids[0]), 4])
+                init_h[ids] = np.ones([len(ids[0])]) * 0.64
 
         blend = to_torch(np.expand_dims(blend, axis=-1), device=self._device)
 
@@ -134,11 +235,14 @@ class MotionLib():
         root_rot1 = to_torch(root_rot1, device=self._device)
         root_vel = to_torch(root_vel, device=self._device)
         root_ang_vel = to_torch(root_ang_vel, device=self._device)
-        local_rot0 = to_torch(local_rot0, device=self._device)
-        local_rot1 = to_torch(local_rot1, device=self._device)
+        joint_pos0 = to_torch(joint_pos0, device=self._device)
+        joint_pos1 = to_torch(joint_pos1, device=self._device)
         key_pos0 = to_torch(key_pos0, device=self._device)
         key_pos1 = to_torch(key_pos1, device=self._device)
         dof_vel = to_torch(dof_vel, device=self._device)
+        thrust0 = to_torch(thrust0, device=self._device)
+        thrust1 = to_torch(thrust1, device=self._device)
+        init_h = to_torch(init_h, device=self._device)
 
         root_pos = (1.0 - blend) * root_pos0 + blend * root_pos1
 
@@ -146,11 +250,36 @@ class MotionLib():
 
         blend_exp = blend.unsqueeze(-1)
         key_pos = (1.0 - blend_exp) * key_pos0 + blend_exp * key_pos1
-        
-        local_rot = slerp(local_rot0, local_rot1, torch.unsqueeze(blend, axis=-1))
-        dof_pos = self._local_rotation_to_dof(local_rot)
 
-        return root_pos, root_rot, dof_pos, root_vel, root_ang_vel, dof_vel, key_pos
+        thrust = (1.0 - blend) * thrust0 + blend * thrust1
+
+        # local_rot = slerp(local_rot0, local_rot1, torch.unsqueeze(blend, axis=-1))
+        # dof_pos = self._local_rotation_to_dof(local_rot)
+        dof_pos = (1.0 - blend) * joint_pos0 + blend * joint_pos1
+        return (
+            root_pos,
+            root_rot,
+            dof_pos,
+            root_vel,
+            root_ang_vel,
+            dof_vel,
+            key_pos,
+            thrust,
+            init_h,
+        )
+
+    def permutation_matrix(self, data_joint_list):
+        permutation_matrix = np.zeros((len(self._dof_names), len(data_joint_list)))
+        for i, joint in enumerate(self._dof_names):
+            permutation_matrix[i, data_joint_list.index(joint)] = 1
+        return permutation_matrix
+
+    def permute_joints(self, data_joint_list, data_joint_values):
+        for k in range(len(data_joint_values)):
+            data_joint_values[k] = np.matmul(
+                self.permutation_matrix(data_joint_list), data_joint_values[k]
+            )
+        return np.array(data_joint_values)
 
     def _load_motions(self, motion_file):
         self._motions = []
@@ -167,28 +296,46 @@ class MotionLib():
         num_motion_files = len(motion_files)
         for f in range(num_motion_files):
             curr_file = motion_files[f]
-            print("Loading {:d}/{:d} motion files: {:s}".format(f + 1, num_motion_files, curr_file))
-            curr_motion = SkeletonMotion.from_file(curr_file)
-            motion_fps = curr_motion.fps
+            print(
+                "Loading {:d}/{:d} motion files: {:s}".format(
+                    f + 1, num_motion_files, curr_file
+                )
+            )
+            # curr_motion = SkeletonMotion.from_file(curr_file)
+            curr_motion = np.load(curr_file, allow_pickle=True).item()
+
+            motion_fps = curr_motion["fps"]
             curr_dt = 1.0 / motion_fps
 
-            num_frames = curr_motion.tensor.shape[0]
+            # num_frames = curr_motion.tensor.shape[0]
+            num_frames = len(curr_motion["joint_positions"])
             curr_len = 1.0 / motion_fps * (num_frames - 1)
 
             self._motion_fps.append(motion_fps)
             self._motion_dt.append(curr_dt)
             self._motion_num_frames.append(num_frames)
- 
+
+            curr_motion["joint_positions"] = self.permute_joints(
+                curr_motion["joints_list"], curr_motion["joint_positions"]
+            )
+
             curr_dof_vels = self._compute_motion_dof_vels(curr_motion)
-            curr_motion.dof_vels = curr_dof_vels
+            curr_motion["dof_vels"] = curr_dof_vels
+
+            curr_global_root_velocity = self._compute_motion_root_lin_vel(curr_motion)
+            curr_motion["global_root_velocity"] = curr_global_root_velocity
+
+            curr_global_root_ang_velocity = self._compute_motion_root_ang_vel(
+                curr_motion
+            )
+            curr_motion["global_root_ang_velocity"] = curr_global_root_ang_velocity
 
             self._motions.append(curr_motion)
             self._motion_lengths.append(curr_len)
-            
+
             curr_weight = motion_weights[f]
             self._motion_weights.append(curr_weight)
             self._motion_files.append(curr_file)
-
 
         self._motion_lengths = np.array(self._motion_lengths)
         self._motion_weights = np.array(self._motion_weights)
@@ -201,25 +348,29 @@ class MotionLib():
         num_motions = self.num_motions()
         total_len = self.get_total_length()
 
-        print("Loaded {:d} motions with a total length of {:.3f}s.".format(num_motions, total_len))
+        print(
+            "Loaded {:d} motions with a total length of {:.3f}s.".format(
+                num_motions, total_len
+            )
+        )
 
         return
 
     def _fetch_motion_files(self, motion_file):
         ext = os.path.splitext(motion_file)[1]
-        if (ext == ".yaml"):
+        if ext == ".yaml":
             dir_name = os.path.dirname(motion_file)
             motion_files = []
             motion_weights = []
 
-            with open(os.path.join(os.getcwd(), motion_file), 'r') as f:
+            with open(os.path.join(os.getcwd(), motion_file), "r") as f:
                 motion_config = yaml.load(f, Loader=yaml.SafeLoader)
 
-            motion_list = motion_config['motions']
+            motion_list = motion_config["motions"]
             for motion_entry in motion_list:
-                curr_file = motion_entry['file']
-                curr_weight = motion_entry['weight']
-                assert(curr_weight >= 0)
+                curr_file = motion_entry["file"]
+                curr_weight = motion_entry["weight"]
+                assert curr_weight >= 0
 
                 curr_file = os.path.join(dir_name, curr_file)
                 motion_weights.append(curr_weight)
@@ -242,83 +393,68 @@ class MotionLib():
 
     def _get_num_bodies(self):
         motion = self.get_motion(0)
-        num_bodies = motion.num_joints
+        num_bodies = self._num_dof
         return num_bodies
 
     def _compute_motion_dof_vels(self, motion):
-        num_frames = motion.tensor.shape[0]
-        dt = 1.0 / motion.fps
+        # num_frames = motion.tensor.shape[0]
+        num_frames = len(motion["joint_positions"])
+        dt = 1.0 / motion["fps"]
         dof_vels = []
 
         for f in range(num_frames - 1):
-            local_rot0 = motion.local_rotation[f]
-            local_rot1 = motion.local_rotation[f + 1]
-            frame_dof_vel = self._local_rotation_to_dof_vel(local_rot0, local_rot1, dt)
-            frame_dof_vel = frame_dof_vel
+            joint0 = motion["joint_positions"][f]
+            joint1 = motion["joint_positions"][f + 1]
+            frame_dof_vel = self._get_dof_vel(joint0, joint1, dt)
             dof_vels.append(frame_dof_vel)
-        
+
         dof_vels.append(dof_vels[-1])
-        dof_vels = np.array(dof_vels)
+        return np.array(dof_vels)
 
-        return dof_vels
-    
-    def _local_rotation_to_dof(self, local_rot):
-        body_ids = DOF_BODY_IDS
-        dof_offsets = DOF_OFFSETS
+    def _compute_motion_root_lin_vel(self, motion):
+        num_frames = len(motion["joint_positions"])
+        dt = 1.0 / motion["fps"]
+        root_lin_vels = []
 
-        n = local_rot.shape[0]
-        dof_pos = torch.zeros((n, self._num_dof), dtype=torch.float, device=self._device)
+        for f in range(num_frames - 1):
+            pos0 = motion["root_position"][f]
+            pos1 = motion["root_position"][f + 1]
+            frame_root_lin_vel = (pos1 - pos0) / dt
+            root_lin_vels.append(frame_root_lin_vel)
 
-        for j in range(len(body_ids)):
-            body_id = body_ids[j]
-            joint_offset = dof_offsets[j]
-            joint_size = dof_offsets[j + 1] - joint_offset
+        root_lin_vels.append(root_lin_vels[-1])
+        return np.array(root_lin_vels)
 
-            if (joint_size == 3):
-                joint_q = local_rot[:, body_id]
-                joint_exp_map = quat_to_exp_map(joint_q)
-                dof_pos[:, joint_offset:(joint_offset + joint_size)] = joint_exp_map
-            elif (joint_size == 1):
-                joint_q = local_rot[:, body_id]
-                joint_theta, joint_axis = quat_to_angle_axis(joint_q)
-                joint_theta = joint_theta * joint_axis[..., 1] # assume joint is always along y axis
+    def _compute_motion_root_ang_vel(self, motion):
+        num_frames = len(motion["root_quaternion"])
+        dt = 1.0 / motion["fps"]
+        root_ang_vels = []
 
-                joint_theta = normalize_angle(joint_theta)
-                dof_pos[:, joint_offset] = joint_theta
+        for f in range(num_frames - 1):
+            q0 = motion["root_quaternion"][f]
+            q1 = motion["root_quaternion"][f + 1]
+            frame_root_ang_vel = self._get_angular_vel(q0, q1, dt)
+            root_ang_vels.append(frame_root_ang_vel)
 
-            else:
-                print("Unsupported joint type")
-                assert(False)
+        root_ang_vels.append(root_ang_vels[-1])
+        return np.array(root_ang_vels)
 
-        return dof_pos
+    def _get_angular_vel(self, q1, q2, dt):
+        # quaternion in the form of [w, x, y, z]
+        # in body frame
+        omega = (2 / dt) * np.array(
+            [
+                q1[0] * q2[1] - q1[1] * q2[0] - q1[2] * q2[3] + q1[3] * q2[2],
+                q1[0] * q2[2] + q1[1] * q2[3] - q1[2] * q2[0] - q1[3] * q2[1],
+                q1[0] * q2[3] - q1[1] * q2[2] + q1[2] * q2[1] - q1[3] * q2[0],
+            ]
+        )
+        # !TODO: convert in inertial frame
+        return omega
 
-    def _local_rotation_to_dof_vel(self, local_rot0, local_rot1, dt):
-        body_ids = DOF_BODY_IDS
-        dof_offsets = DOF_OFFSETS
+    def _get_dof_vel(self, joint0, joint1, dt):
+        return (joint1 - joint0) / dt
 
-        dof_vel = np.zeros([self._num_dof])
 
-        diff_quat_data = quat_mul_norm(quat_inverse(local_rot0), local_rot1)
-        diff_angle, diff_axis = quat_angle_axis(diff_quat_data)
-        local_vel = diff_axis * diff_angle.unsqueeze(-1) / dt
-        local_vel = local_vel.numpy()
-
-        for j in range(len(body_ids)):
-            body_id = body_ids[j]
-            joint_offset = dof_offsets[j]
-            joint_size = dof_offsets[j + 1] - joint_offset
-
-            if (joint_size == 3):
-                joint_vel = local_vel[body_id]
-                dof_vel[joint_offset:(joint_offset + joint_size)] = joint_vel
-
-            elif (joint_size == 1):
-                assert(joint_size == 1)
-                joint_vel = local_vel[body_id]
-                dof_vel[joint_offset] = joint_vel[1] # assume joint is always along y axis
-
-            else:
-                print("Unsupported joint type")
-                assert(False)
-
-        return dof_vel
+def to_xyzw(wxyz):
+    return np.array([wxyz[1], wxyz[2], wxyz[3], wxyz[0]])

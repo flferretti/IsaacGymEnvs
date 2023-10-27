@@ -1,0 +1,14 @@
+<?xml version='1.0'?>
+<sdf version='1.7'>
+  <model name="ergocub_fixed">
+    <include>
+      <uri>model://ergoCubGazeboV1_1_minContacts</uri>
+      <pose>0.0 0 1.0 0 0 3.14</pose>
+    </include>
+
+    <joint name="fixed_base" type="fixed">
+      <parent>world</parent>
+      <child>ergoCub::root_link</child>
+    </joint>
+  </model>
+</sdf>
