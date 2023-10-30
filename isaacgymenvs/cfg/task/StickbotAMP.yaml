@@ -26,7 +26,8 @@ env:
   # animation files to learn from
   # these motions should use hyperparameters from StickbotAMPPPO.yaml
   #motion_file: "amp_humanoid_walk.npy"
-  motion_file: "icub_run.npy"
+  # motion_file: "icub_run.npy"
+  motion_file: "ergocub_motions.npy"
   #motion_file: "amp_humanoid_dance.npy"
 
   # these motions should use hyperparameters from StickbotAMPPPOLowGP.yaml
