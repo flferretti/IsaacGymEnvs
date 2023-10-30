@@ -24,7 +24,7 @@ params:
         learn_sigma: False
 
     mlp:
-      units: [1024, 512]
+      units: [512, 256, 128]
       activation: relu
       d2rl: False
 
@@ -72,7 +72,7 @@ params:
     truncate_grads: False
     e_clip: 0.2
     horizon_length: 16
-    minibatch_size: 512 #4096 #8192 #32768
+    minibatch_size: 8192 #32768
     mini_epochs: 6
     critic_coef: 5
     clip_value: False
@@ -82,7 +82,7 @@ params:
     amp_replay_buffer_size: 1000000
     amp_replay_keep_prob: 0.01
     amp_batch_size: 512
-    amp_minibatch_size: 512 #4096
+    amp_minibatch_size: 4096
     disc_coef: 5
     disc_logit_reg: 0.05
     disc_grad_penalty: 5
