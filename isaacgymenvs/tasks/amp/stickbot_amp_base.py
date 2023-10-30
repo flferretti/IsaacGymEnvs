@@ -39,9 +39,6 @@ from isaacgymenvs.utils.torch_jit_utils import *
 from ..base.vec_task import VecTask
 
 
-# NUM_OBS = (
-#     13 + 52 + 28 + 12
-# )  # [root_h, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, key_body_pos]
 NUM_OBS = 71 + 3 + 1  # + 1  # 1 + 4 + 6 + 23 + 23  # + 12
 NUM_ACTIONS = 23
 
@@ -171,10 +168,10 @@ class StickbotAMPBase(VecTask):
         # z_random = (z_random < 2) * 0.7 + (z_random >= 2) * z_random
 
         self.tar = torch.cat((x_random, y_random, z_random), dim=1)
-
-        self.wrench_f = torch.zeros(
-            (self.num_envs, self.num_bodies, 3), device=self.device, dtype=torch.float
-        )
+        x_next = torch_rand_float(3, 4, (self.num_envs, 1), device=self.device)
+        y_next = torch_rand_float(-1, 1, (self.num_envs, 1), device=self.device)
+        z_next = torch.zeros((self.num_envs, 1), device=self.device)
+        self.tar_next = self.tar + torch.cat((x_next, y_next, z_next), dim=1)
 
         self.des_vel = torch.ones(self.num_envs, device=self.device) * 1.2
 
@@ -382,19 +379,24 @@ class StickbotAMPBase(VecTask):
         if env_ids is None:
             root_states = self._root_states
             tar_pos = self.tar
+            tar_pos_next = self.tar_next
             des_vel = self.des_vel
         else:
             root_states = self._root_states[env_ids]
             tar_pos = self.tar[env_ids]
+            tar_pos_next = self.tar_next[env_ids]
             des_vel = self.des_vel[env_ids]
-        obs = self._compute_location_obs(root_states, tar_pos, des_vel)
+        obs = self._compute_location_obs(root_states, tar_pos_next, tar_pos, des_vel)
         return obs
 
-    def _compute_location_obs(self, root_states, tar_pos, des_vel):
+    def _compute_location_obs(self, root_states, tar_pos, tar_pos_next, des_vel):
         root_pos = root_states[:, :3]
         root_rot = root_states[:, 3:7]
         dist_vec = tar_pos - root_pos
         local_tar_in_3d = quat_rotate_inverse(root_rot, dist_vec) / 5
+        dist_vec_next = tar_pos_next - root_pos     
+        local_tar_in_3d_next = quat_rotate_inverse(root_rot, dist_vec_next)
+
         obs = torch.cat([local_tar_in_3d, des_vel.reshape(-1, 1)], dim=-1)
 
         return obs
@@ -405,13 +407,11 @@ class StickbotAMPBase(VecTask):
             dof_pos = self._dof_pos
             dof_vel = self._dof_vel
             key_body_pos = self._rigid_body_pos[:, self._key_body_ids, :]
-            # thrust = self.actions[:, self.num_dof :]
         else:
             root_states = self._root_states[env_ids]
             dof_pos = self._dof_pos[env_ids]
             dof_vel = self._dof_vel[env_ids]
             key_body_pos = self._rigid_body_pos[env_ids][:, self._key_body_ids, :]
-            # thrust = self.actions[env_ids][:, self.num_dof :]
 
         obs = compute_robot_observations(
             root_states, dof_pos, dof_vel, key_body_pos, self._local_root_obs
@@ -448,20 +448,16 @@ class StickbotAMPBase(VecTask):
         alpha = 0.5
         self.output += alpha * (self.actions - self.output)
 
-        joint_targets = self.output[:, : self.num_dof]
+        joint_targets = self.output#[:, : self.num_dof]
 
         # position control
         pd_tar = self._action_to_pd_targets(joint_targets)
         tar_tensor = gymtorch.unwrap_tensor(pd_tar)
         self.gym.set_dof_position_target_tensor(self.sim, tar_tensor)
 
-        if self.enable_viewer_sync:
-            self.draw_targets()
-
         return
 
     def draw_heading(self, root_states, prev_root_states):
-        # self.gym.clear_lines(self.viewer)
         root_pos = root_states[:, :3]
         root_rot = root_states[:, 3:7]
         root_vel = root_states[:, 7:10]
@@ -512,9 +508,9 @@ class StickbotAMPBase(VecTask):
 
     def post_physics_step(self):
         self.progress_buf += 1
-        # if self.viewer and self.enable_viewer_sync:
-        #     self.draw_heading(self._root_states, self._previous_root_states)
-
+        if self.viewer and self.enable_viewer_sync:
+             self.gym.clear_lines(self.viewer)
+             self.draw_targets()
         self._refresh_sim_tensors()
         self._compute_observations()
         self._compute_reward(self._root_states, self._previous_root_states, self.tar)
@@ -522,14 +518,6 @@ class StickbotAMPBase(VecTask):
 
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         task_res_ids = self.task_reset.nonzero(as_tuple=False).squeeze(-1)
-
-        # if (
-        #     (len(env_ids) > 0 and env_ids[0] == 0)
-        #     or (len(task_res_ids) > 0 and task_res_ids[0] == 0)
-        #     and self.viewer
-        #     and self.enable_viewer_sync
-        # ):
-        #     self.draw_targets()
 
         if len(task_res_ids) > 0:
             self.advance_target(task_res_ids)
@@ -545,43 +533,50 @@ class StickbotAMPBase(VecTask):
         self.extras["terminate"] = self._terminate_buf
 
         self._previous_root_states = self._root_states.clone()
-        # debug viz
+
         if self.viewer and self.debug_viz:
             self._update_debug_viz()
 
         return
 
     def draw_targets(self):
-        # self.gym.clear_lines(self.viewer)
-        # draw sphere on target 0, 0.64 height
+        self.gym.clear_lines(self.viewer)
         sphere_geom = gymutil.WireframeSphereGeometry(0.1, 4, 4, None, color=(1, 1, 0))
         sphere_position = gymapi.Vec3(self.tar[0, 0], self.tar[0, 1], self.tar[0, 2])
         sphere_pose = gymapi.Transform(sphere_position, r=None)
         gymutil.draw_lines(
             sphere_geom, self.gym, self.viewer, self.envs[0], sphere_pose
         )
+        sphere_position_next = gymapi.Vec3(
+            self.tar_next[0, 0], self.tar_next[0, 1], self.tar_next[0, 2]
+        )
+        sphere_pose_next = gymapi.Transform(sphere_position_next, r=None)
+        gymutil.draw_lines(
+            sphere_geom, self.gym, self.viewer, self.envs[0], sphere_pose_next
+        )
 
     def advance_target(self, env_ids):
-        # random targets
+        self.tar[env_ids, :] = self.tar_next[env_ids, :].clone()
+
         x_random = torch_rand_float(2, 2, (len(env_ids), 1), device=self.device)
         y_random = torch_rand_float(-0.1, 0.1, (len(env_ids), 1), device=self.device)
-        z_random = torch_rand_float(0.7, 3, (len(env_ids), 1), device=self.device)
+        z_random = torch_rand_float(0.7, 2.5, (len(env_ids), 1), device=self.device)
         delta_random = torch.cat((x_random, y_random, z_random), dim=1)
-        self.tar[env_ids, :] += delta_random
-        z_random = (z_random < 2) * 0.7 + (z_random >= 2) * z_random
-        z_random = torch.clip(z_random, 0.7, 4.0)
-        self.tar[env_ids, 2] = z_random.squeeze()
-        # self.des_vel += torch.ones(self.num_envs) *
+
+        self.tar_next[env_ids, :] = self.tar_next[env_ids, :] + delta_random
+        z_random = (z_random < 1.5) * 0.7 + (z_random >= 1.5) * z_random
+        z_random = torch.clip(z_random, 0.7, 0.7)
+        self.tar_next[env_ids, 2] = z_random.squeeze()
         self.task_reset[env_ids] = 0
 
     def reset_targets(self, env_ids):
         # random targets
         x_random = torch_rand_float(3, 3, (len(env_ids), 1), device=self.device)
         y_random = torch_rand_float(-0.1, 0.1, (len(env_ids), 1), device=self.device)
-        z_random = torch.ones((len(env_ids), 1), device=self.device) * 0.7
-        # z_random = torch_rand_float(0.7, 3, (len(env_ids), 1), device=self.device)
-        # z_random = (z_random < 1.5) * 0.7 + (z_random >= 1.5) * z_random
-        z_random = torch.clip(z_random, 0.7, 4.0)
+        # z_random = torch.ones((len(env_ids), 1), device=self.device) * 0.7
+        z_random = torch_rand_float(0.7, 2.5, (len(env_ids), 1), device=self.device)
+        z_random = (z_random < 1.5) * 0.7 + (z_random >= 1.5) * z_random
+        z_random = torch.clip(z_random, 0.7, 0.7)
         self.tar[env_ids, :] = torch.cat((x_random, y_random, z_random), dim=1)
         # self.des_vel = torch.ones(self.num_envs) * 1
         self.task_reset[env_ids] = 0
@@ -596,7 +591,6 @@ class StickbotAMPBase(VecTask):
     def _build_key_body_ids_tensor(self, env_ptr, actor_handle):
         body_ids = []
         for body_name in KEY_BODY_NAMES:
-            print(body_name)
             body_id = self.gym.find_actor_rigid_body_handle(
                 env_ptr, actor_handle, body_name
             )
@@ -756,7 +750,7 @@ def compute_target_reward(root_state, prev_root_state, des_vel, dt, target):
     dist_diff = des_vel - (dist_pre - dist_now) / dt
     # dist_diff = torch.clip(dist_diff, 0.0, None)
     dist_diff = torch.square(dist_diff)
-    vel_reward = torch.exp(-0.5 * dist_diff)
+    vel_reward = torch.exp(-5 * dist_diff)
     # target_rew = (dist_pre - dist_now) / dt
 
     # print("target", target[0])
@@ -795,16 +789,16 @@ def compute_target_reward(root_state, prev_root_state, des_vel, dt, target):
     # facing_err = torch.clamp_min(facing_err, 0.0)
     # facing_reward = torch.exp(-facing_err * facing_err)
 
-    dist_mask = pos_err < 0.4  # dist-threshold
-    facing_reward[dist_mask] = 1.0
-    vel_reward[dist_mask] = 1.0
-    target_rew[dist_mask] = 1.0
+    dist_mask = pos_err < 0.2  # dist-threshold
+    facing_reward[dist_mask] = 2.0
+    vel_reward[dist_mask] = 2.0
+    target_rew[dist_mask] = 2.0
 
     target_w = 0.5
     vel_w = 0.4
     facing_w = 0.1
 
-    rew = 0.5 * target_rew + 0.4 * vel_reward + 0.2 * facing_reward
+    rew = 0.2 * target_rew + 0.9 * vel_reward + 0.2 * facing_reward
 
     return rew, dist_mask
 

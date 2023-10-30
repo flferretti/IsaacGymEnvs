@@ -19,7 +19,7 @@ params:
           name: default
         sigma_init:
           name: const_initializer
-          val: -2.9
+          val: 0
         fixed_sigma: True
         learn_sigma: False
 
@@ -60,7 +60,7 @@ params:
     gamma: 0.99
     tau: 0.95
     learning_rate: 5e-5
-    lr_schedule: constant
+    lr_schedule: adaptive
     kl_threshold: 0.008
     score_to_win: 20000
     max_epochs: ${resolve_default:5000,${....max_iterations}}
@@ -71,13 +71,13 @@ params:
     entropy_coef: 0.0
     truncate_grads: False
     e_clip: 0.2
-    horizon_length: 16
-    minibatch_size: 8192 #32768
+    horizon_length: 24
+    minibatch_size: 32768
     mini_epochs: 6
     critic_coef: 5
-    clip_value: False
+    clip_value: True
     seq_len: 4
-    bounds_loss_coef: 10
+    bounds_loss_coef: 0.001
     amp_obs_demo_buffer_size: 200000
     amp_replay_buffer_size: 1000000
     amp_replay_keep_prob: 0.01

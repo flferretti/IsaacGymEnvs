@@ -407,7 +407,6 @@ class StickbotAMP(StickbotAMPBase):
                 self._dof_vel,
                 key_body_pos,
                 self._local_root_obs,
-                # self.thrust_all,
             )
         else:
             self._curr_amp_obs_buf[env_ids] = build_amp_observations(
@@ -416,9 +415,7 @@ class StickbotAMP(StickbotAMPBase):
                 self._dof_vel[env_ids],
                 key_body_pos[env_ids],
                 self._local_root_obs,
-                # self.thrust_all[env_ids],
             )
-        # print("amp obs vel", self._curr_amp_obs_buf[0, :])
         return
 
 
@@ -446,26 +443,12 @@ def build_amp_observations1(
         root_rot_obs = quat_mul(heading_rot, root_rot)
     else:
         root_rot_obs = root_rot
-    # root_rot_obs = quat_to_tan_norm(root_rot_obs)
-
-    # root_h_and_rot[:, 1:] = root_rot_obs
-
-    # local_root_vel = my_quat_rotate(heading_rot, root_vel)
     local_root_vel = quat_rotate_inverse(root_rot, root_vel)
     local_root_ang_vel = my_quat_rotate(heading_rot, root_ang_vel)
 
     root_pos_expand = root_pos.unsqueeze(-2)
 
     local_key_body_pos = key_body_pos - root_pos_expand
-
-    # local_ee = local_key_body_pos
-    # rotate key body pos to local frame
-    # local_ee = [
-    #     quat_rotate_inverse(root_rot, local_key_body_pos[:, i : i + 3])
-    #     for i in range(4)
-    # ]
-    # local_ee = torch.cat(local_ee, dim=-1)
-    # local_ee = quat_rotate_inverse(root_rot, local_key_body_pos)
 
     heading_rot_expand = heading_rot.unsqueeze(-2)
     heading_rot_expand = heading_rot_expand.repeat((1, local_key_body_pos.shape[1], 1))
@@ -488,14 +471,9 @@ def build_amp_observations1(
 
     obs = torch.cat(
         (
-            # root_abs_rot,
             local_root_vel,
-            # root_vel,
-            # root_ang_vel,
-            # local_root_ang_vel,
             dof_obs,
             dof_vel,
-            # local_ee.view(local_ee.shape[0], -1),
             flat_local_key_pos,
         ),
         dim=-1,
