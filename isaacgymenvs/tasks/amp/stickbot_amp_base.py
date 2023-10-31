@@ -1,32 +1,3 @@
-# Copyright (c) 2018-2023, NVIDIA Corporation
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice, this
-#    list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-#    this list of conditions and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-#    contributors may be used to endorse or promote products derived from
-#    this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
 import numpy as np
 import os
 import torch
@@ -39,7 +10,7 @@ from isaacgymenvs.utils.torch_jit_utils import *
 from ..base.vec_task import VecTask
 
 
-NUM_OBS = 71 + 3 + 1  # + 1  # 1 + 4 + 6 + 23 + 23  # + 12
+NUM_OBS = 75
 NUM_ACTIONS = 23
 
 KEY_BODY_NAMES = ["r_forearm", "l_forearm", "r_sole", "l_sole"]
@@ -88,7 +59,7 @@ class StickbotAMPBase(VecTask):
         )
 
         dt = self.cfg["sim"]["dt"]
-        # TODO: check if this is correct, in the config file it is was 2!
+
         self.dt = self.control_freq_inv * dt
 
         # get gym GPU state tensors
@@ -163,9 +134,6 @@ class StickbotAMPBase(VecTask):
         x_random = torch_rand_float(3, 4, (self.num_envs, 1), device=self.device)
         y_random = torch_rand_float(-1, 1, (self.num_envs, 1), device=self.device)
         z_random = torch.ones((self.num_envs, 1), device=self.device) * 0.7
-        # z_random = torch_rand_float(0.7, 3, (self.num_envs, 1), device=self.device)
-
-        # z_random = (z_random < 2) * 0.7 + (z_random >= 2) * z_random
 
         self.tar = torch.cat((x_random, y_random, z_random), dim=1)
         x_next = torch_rand_float(3, 4, (self.num_envs, 1), device=self.device)
@@ -174,10 +142,6 @@ class StickbotAMPBase(VecTask):
         self.tar_next = self.tar + torch.cat((x_next, y_next, z_next), dim=1)
 
         self.des_vel = torch.ones(self.num_envs, device=self.device) * 1.2
-
-        # self.energy_condition = torch.ones(
-        #     self.num_envs, dtype=torch.long, device=self.device
-        # )
 
         rigid_body_states_tensor = self.gym.acquire_rigid_body_state_tensor(self.sim)
         self.rb_states = gymtorch.wrap_tensor(rigid_body_states_tensor).view(
@@ -215,21 +179,14 @@ class StickbotAMPBase(VecTask):
         self._reset_actors(env_ids)
         self._refresh_sim_tensors()
         self._compute_observations(env_ids)
-        # self.energy_condition[env_ids] = ((torch_rand_float(
-        #     0, 1, (len(env_ids),1), device=self.device
-        # ) > 0.5) * 1).squeeze()
-        # self.thrust_all = torch.zeros(
-        #     self.num_envs, 4, dtype=torch.float, device=self.device
-        # )
         return
 
     def _create_ground_plane(self):
         plane_params = gymapi.PlaneParams()
         plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
         # TODO: removed for now, need to test
-        plane_params.static_friction = 3  # self.plane_static_friction
-        plane_params.dynamic_friction = 3  # self.plane_dynamic_friction
-        # plane_params.restitution = self.plane_restitution
+        plane_params.static_friction = 3  
+        plane_params.dynamic_friction = 3 
         self.gym.add_ground(self.sim, plane_params)
         return
 
@@ -259,7 +216,7 @@ class StickbotAMPBase(VecTask):
 
         for i in range(self.num_dof):
             dof_props["driveMode"][i] = gymapi.DOF_MODE_POS
-            dof_props["stiffness"][i] = 40
+            dof_props["stiffness"][i] = 30
             dof_props["damping"][i] = 20
 
         start_pose = gymapi.Transform()
@@ -279,7 +236,6 @@ class StickbotAMPBase(VecTask):
             )
 
             self.gym.set_actor_dof_properties(env_ptr, handle, dof_props)
-            # self.gym.enable_actor_dof_force_sensors(env_ptr, handle)
             self.envs.append(env_ptr)
             self.humanoid_handles.append(handle)
 
@@ -332,7 +288,6 @@ class StickbotAMPBase(VecTask):
         return
 
     def _compute_reward(self, root_state, prev_root_state, target):
-        # print("rew", compute_target_reward(root_state, target))
         self.rew_buf[:], self.task_reset[:] = compute_target_reward(
             root_state, prev_root_state, self.des_vel, self.dt, target
         )
@@ -368,10 +323,8 @@ class StickbotAMPBase(VecTask):
         obs = self._compute_humanoid_obs(env_ids)
         task_obs = self._compute_task_obs(env_ids)
         if env_ids is None:
-            # energy_condition = self.energy_condition.reshape(-1, 1)
             self.obs_buf[:] = torch.cat([obs, task_obs], dim=-1)
         else:
-            # energy_condition = self.energy_condition[env_ids].reshape(-1, 1)
             self.obs_buf[env_ids] = torch.cat([obs, task_obs], dim=-1)
         return
 
@@ -573,12 +526,9 @@ class StickbotAMPBase(VecTask):
         # random targets
         x_random = torch_rand_float(3, 3, (len(env_ids), 1), device=self.device)
         y_random = torch_rand_float(-0.1, 0.1, (len(env_ids), 1), device=self.device)
-        # z_random = torch.ones((len(env_ids), 1), device=self.device) * 0.7
         z_random = torch_rand_float(0.7, 2.5, (len(env_ids), 1), device=self.device)
-        z_random = (z_random < 1.5) * 0.7 + (z_random >= 1.5) * z_random
         z_random = torch.clip(z_random, 0.7, 0.7)
         self.tar[env_ids, :] = torch.cat((x_random, y_random, z_random), dim=1)
-        # self.des_vel = torch.ones(self.num_envs) * 1
         self.task_reset[env_ids] = 0
 
     def render(self):
@@ -734,16 +684,9 @@ def compute_target_reward(root_state, prev_root_state, des_vel, dt, target):
     face_reward_w = 0.1
 
     # unit vector from root to target
-    # target_err = target - root_pos[:, :2]
-    # pos_err = torch.sum(torch.square(target_err), dim=-1)
-    # pos_err = target_err * target_err
-    # target_err = target - root_pos[..., 0:2]
     target_err = target - root_pos
     pos_err = torch.sum(target_err * target_err, dim=-1)
     target_rew = torch.exp(-pos_err_scale * pos_err)
-
-    # # I'm having a reward even if I'm going far from the target
-    # # I want to maximize the progress. I'm I'm not going towards the target I should get a negative reward
 
     dist_pre = torch.linalg.norm(target - prev_root_state[:, 0:3], dim=-1)
     dist_now = torch.linalg.norm(target - root_pos, dim=-1)
@@ -752,15 +695,6 @@ def compute_target_reward(root_state, prev_root_state, des_vel, dt, target):
     dist_diff = torch.square(dist_diff)
     vel_reward = torch.exp(-5 * dist_diff)
     # target_rew = (dist_pre - dist_now) / dt
-
-    # print("target", target[0])
-    # print("root_pos", root_pos[0])
-    # print("root_pre", prev_root_state[0, :3])
-    # print("dist_pre", dist_pre[0])
-    # print("dist_now", dist_now[0])
-
-    # print("dist_diff", dist_diff[0])
-    # print("target_rew", target_rew[0])
 
     target_dir = target_err / torch.linalg.norm(target_err)
 
@@ -780,7 +714,7 @@ def compute_target_reward(root_state, prev_root_state, des_vel, dt, target):
 
     heading_rot = calc_heading_quat(root_rot)
     facing_dir = torch.zeros_like(root_pos)
-    facing_dir[..., 0] = -1.0  #! the x axis of the robot is backwards
+    facing_dir[..., 0] = -1.0  
     facing_dir = quat_rotate(heading_rot, facing_dir)
     facing_err = torch.sum(target_dir[..., 0:2] * facing_dir[..., 0:2], dim=-1)
     # facing_err = torch.sum(facing_dir[..., 0:2] * target_dir, dim=-1)
@@ -789,7 +723,7 @@ def compute_target_reward(root_state, prev_root_state, des_vel, dt, target):
     # facing_err = torch.clamp_min(facing_err, 0.0)
     # facing_reward = torch.exp(-facing_err * facing_err)
 
-    dist_mask = pos_err < 0.2  # dist-threshold
+    dist_mask = pos_err < 0.2 
     facing_reward[dist_mask] = 2.0
     vel_reward[dist_mask] = 2.0
     target_rew[dist_mask] = 2.0
@@ -821,17 +755,13 @@ def compute_humanoid_reset(
     too_high = body_height >= 5.0
 
     ang_vel_penalty = root_state[:, 10:13].pow(2).sum(dim=-1) * 0.001
-    # base_lin_vel = quat_rotate_inverse(root_state[:, 3:7], root_state[:, 7:10])
     base_lin_vel = root_state[:, 7:10]
-    # print("horiz vel", base_lin_vel[:, 0])
-    # velocity tracking reward
     lin_vel_error = torch.square(3 - base_lin_vel[:, 0])
     rew_lin_vel_xy = torch.exp(-lin_vel_error / 0.25)
 
     base_h_err = torch.square(0.63 - body_height)
     rew_base_h = torch.exp(-base_h_err / 0.25)
 
-    # joint vel penalty
     joint_vel_penalty = joint_vel.pow(2).sum(dim=-1) * 1e-3
 
     reward = (
